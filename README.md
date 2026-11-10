@@ -54,6 +54,7 @@ built with gcc 14, so the plugin must be too (toolchain tag
 with nixpkgs' gcc 14:
 
 ```bash
+mkdir -p /tmp/orc-v2.11.1
 git -C /path/to/decode-orc archive v2.11.1 orc/sdk | tar -x -C /tmp/orc-v2.11.1
 GCC14=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#gcc14)
 nix develop --command bash -c "CXX=$GCC14/bin/g++ CC=$GCC14/bin/gcc \
