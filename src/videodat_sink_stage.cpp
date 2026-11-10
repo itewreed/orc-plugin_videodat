@@ -540,6 +540,9 @@ bool VideoDatSinkStage::trigger(const std::vector<ArtifactPtr>& inputs,
             argv,
             [&](const std::string& line) {
                 log << line << "\n";
+                if (line.empty()) {
+                    return;
+                }
                 last_line = line;
                 // Summary line: "<n> Dateien, davon <m> vollstaendig"
                 if (line.find(" Dateien, davon ") != std::string::npos) {

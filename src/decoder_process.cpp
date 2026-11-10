@@ -30,13 +30,17 @@ namespace orc::plugins::videodat {
 namespace {
 
 // Splits |chunk| into lines, keeping an unterminated tail in |pending|.
-// Carriage returns (progress output) also end a line.
+// A carriage return (progress output) ends a non-empty line.
 void feed(std::string& pending, const char* data, size_t n,
           const std::function<void(const std::string&)>& on_line)
 {
     for (size_t i = 0; i < n; ++i) {
         const char c = data[i];
-        if (c == '\n' || c == '\r') {
+        if (c == '\n') {
+            // Empty lines are kept: they structure the decoder's report.
+            on_line(pending);
+            pending.clear();
+        } else if (c == '\r') {
             if (!pending.empty()) {
                 on_line(pending);
                 pending.clear();
