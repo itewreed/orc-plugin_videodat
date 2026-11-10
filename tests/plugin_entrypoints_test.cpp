@@ -18,7 +18,7 @@ bool register_probe(void* context, const char* stage_name, orc::OrcStageFactoryF
     if (called) {
         *called = true;
     }
-    return std::string(stage_name) == "skeleton_passthrough";
+    return std::string(stage_name) == "videodat_decoder";
 }
 
 } // namespace
@@ -31,7 +31,7 @@ int main()
         return 1;
     }
 
-    if (std::string(descriptor->plugin_id) != "org.decodeorc.stage.skeleton_passthrough") {
+    if (std::string(descriptor->plugin_id) != "io.github.itewreed.stage.videodat_decoder") {
         std::cerr << "Unexpected plugin_id\n";
         return 1;
     }

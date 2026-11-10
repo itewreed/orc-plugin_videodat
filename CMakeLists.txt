@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(orc-plugin-skeleton
-    VERSION 1.0.9
-    DESCRIPTION "Decode-Orc external plugin skeleton"
+project(orc-plugin-videodat
+    VERSION 0.1.0
+    DESCRIPTION "Decode-Orc VideoDat decoder sink stage plugin"
     LANGUAGES CXX
 )
 
@@ -26,7 +26,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(BUILD_TESTS "Build skeleton plugin tests" ON)
+option(BUILD_TESTS "Build plugin tests" ON)
+
+# channel-videodat-decoder checkout whose Python scripts are copied next to
+# the plugin (videodat-decoder/), where the stage looks for them by default.
+set(VIDEODAT_DECODER_DIR "" CACHE PATH
+    "channel-videodat-decoder checkout to bundle with the plugin (optional)")
 
 if(DEFINED ORC_INTREE_SDK_DIR)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DecodeOrcPluginSDKHelpers.cmake")
@@ -60,21 +65,44 @@ else()
     find_package(decode-orc-plugin-sdk REQUIRED)
 endif()
 
-set(SKELETON_STAGE_NAME "skeleton_passthrough")
-set(SKELETON_PLUGIN_TARGET "orc-stage-plugin-skeleton-passthrough")
+set(VIDEODAT_STAGE_NAME "videodat_decoder")
+set(VIDEODAT_PLUGIN_TARGET "orc-stage-plugin-videodat")
+
+set(VIDEODAT_STAGE_SOURCES
+    src/videodat_sink_stage.cpp
+    src/vbi_tbc_writer.cpp
+    src/decoder_process.cpp
+)
 
 orc_add_stage_plugin(
-    ${SKELETON_PLUGIN_TARGET}
-    OUTPUT_NAME ${SKELETON_PLUGIN_TARGET}
+    ${VIDEODAT_PLUGIN_TARGET}
+    OUTPUT_NAME ${VIDEODAT_PLUGIN_TARGET}
     PLUGIN_VERSION ${ORC_PLUGIN_VERSION}
     SOURCES
         src/plugin.cpp
-        src/skeleton_passthrough_stage.cpp
+        ${VIDEODAT_STAGE_SOURCES}
 )
 
-target_include_directories(${SKELETON_PLUGIN_TARGET} PRIVATE
+target_include_directories(${VIDEODAT_PLUGIN_TARGET} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+if(VIDEODAT_DECODER_DIR)
+    file(GLOB _videodat_scripts "${VIDEODAT_DECODER_DIR}/*.py")
+    if(NOT _videodat_scripts)
+        message(FATAL_ERROR "VIDEODAT_DECODER_DIR has no Python scripts: ${VIDEODAT_DECODER_DIR}")
+    endif()
+    foreach(_script IN LISTS _videodat_scripts)
+        get_filename_component(_name "${_script}" NAME)
+        add_custom_command(TARGET ${VIDEODAT_PLUGIN_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${VIDEODAT_PLUGIN_TARGET}>/videodat-decoder"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_script}"
+                "$<TARGET_FILE_DIR:${VIDEODAT_PLUGIN_TARGET}>/videodat-decoder/${_name}")
+    endforeach()
+    install(FILES ${_videodat_scripts}
+        DESTINATION "${ORC_STAGE_PLUGIN_INSTALL_DIR}/videodat-decoder")
+endif()
 
 # Build-info emitter for the release manifest (host ABI 12 and later).
 # Compiled with the same toolchain and SDK headers as the plugin, it prints

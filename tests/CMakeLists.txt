@@ -1,40 +1,31 @@
 if(DEFINED ORC_INTREE_SDK_DIR AND TARGET orc-plugin-sdk)
-    set(SKELETON_TEST_SDK_TARGET orc-plugin-sdk)
+    set(VIDEODAT_TEST_SDK_TARGET orc-plugin-sdk)
 elseif(TARGET orc::plugin-sdk)
-    set(SKELETON_TEST_SDK_TARGET orc::plugin-sdk)
+    set(VIDEODAT_TEST_SDK_TARGET orc::plugin-sdk)
 elseif(TARGET orc-plugin-sdk)
-    set(SKELETON_TEST_SDK_TARGET orc-plugin-sdk)
+    set(VIDEODAT_TEST_SDK_TARGET orc-plugin-sdk)
 else()
     message(FATAL_ERROR "Neither orc::plugin-sdk nor orc-plugin-sdk is available for tests")
 endif()
 
-add_executable(skeleton_stage_smoke_test
-    stage_smoke_test.cpp
-    ../src/skeleton_passthrough_stage.cpp
+function(videodat_add_test name)
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE ${VIDEODAT_TEST_SDK_TARGET})
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(${name} PRIVATE dl)
+    endif()
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    add_test(NAME ${name} COMMAND ${name} ${CMAKE_CURRENT_BINARY_DIR})
+endfunction()
+
+set(_stage_sources
+    ../src/videodat_sink_stage.cpp
+    ../src/vbi_tbc_writer.cpp
+    ../src/decoder_process.cpp
 )
 
-target_link_libraries(skeleton_stage_smoke_test PRIVATE
-    ${SKELETON_TEST_SDK_TARGET}
-)
-
-target_include_directories(skeleton_stage_smoke_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-
-add_test(NAME skeleton_stage_smoke_test COMMAND skeleton_stage_smoke_test)
-
-add_executable(skeleton_plugin_entrypoints_test
-    plugin_entrypoints_test.cpp
-    ../src/plugin.cpp
-    ../src/skeleton_passthrough_stage.cpp
-)
-
-target_link_libraries(skeleton_plugin_entrypoints_test PRIVATE
-    ${SKELETON_TEST_SDK_TARGET}
-)
-
-target_include_directories(skeleton_plugin_entrypoints_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-
-add_test(NAME skeleton_plugin_entrypoints_test COMMAND skeleton_plugin_entrypoints_test)
+videodat_add_test(videodat_stage_smoke_test stage_smoke_test.cpp ${_stage_sources})
+videodat_add_test(videodat_writer_test vbi_tbc_writer_test.cpp ../src/vbi_tbc_writer.cpp)
+videodat_add_test(videodat_trigger_test trigger_test.cpp ${_stage_sources})
+videodat_add_test(videodat_plugin_entrypoints_test plugin_entrypoints_test.cpp
+    ../src/plugin.cpp ${_stage_sources})

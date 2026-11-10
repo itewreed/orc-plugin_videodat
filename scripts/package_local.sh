@@ -93,7 +93,7 @@ done
 
 plugin_name="orc-plugin_${stage_name}_${platform}_abi${abi}.${ext}"
 
-candidate="$(find "$build_dir" -type f \( -name "*orc-stage-plugin-skeleton-passthrough*.${ext}" -o -name "orc-stage-plugin-skeleton-passthrough.${ext}" \) | head -n 1)"
+candidate="$(find "$build_dir" -type f \( -name "*orc-stage-plugin-videodat*.${ext}" -o -name "orc-stage-plugin-videodat.${ext}" \) | head -n 1)"
 
 if [[ -z "$candidate" ]]; then
     echo "Could not locate built plugin binary in $build_dir"

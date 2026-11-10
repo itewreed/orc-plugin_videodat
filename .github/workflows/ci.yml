@@ -38,7 +38,7 @@ jobs:
             use_nix: false
 
     steps:
-      - name: Checkout skeleton plugin
+      - name: Checkout plugin
         uses: actions/checkout@v4
 
       - name: Checkout decode-orc host repository
@@ -113,7 +113,7 @@ jobs:
         if: ${{ !matrix.use_nix }}
         run: ctest --test-dir build --output-on-failure -C Release
 
-      # Names the asset orc-plugin_skeleton_passthrough_<platform>_abi<N>.<ext>
+      # Names the asset orc-plugin_videodat_decoder_<platform>_abi<N>.<ext>
       # and writes dist/plugin-manifest-<platform>.yaml declaring its platform,
       # host ABI, toolchain tag and SHA-256 — the facts the mandatory release
       # manifest is assembled from in publish-release.
@@ -145,7 +145,7 @@ jobs:
     needs: build-test-package
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout skeleton plugin
+      - name: Checkout plugin
         uses: actions/checkout@v4
 
       - name: Download all artifacts
@@ -166,5 +166,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/**/orc-plugin_skeleton_passthrough_*
+            artifacts/**/orc-plugin_videodat_decoder_*
             orc-plugin-manifest.yaml

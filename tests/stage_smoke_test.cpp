@@ -1,40 +1,148 @@
-#include "skeleton_passthrough_stage.h"
+#include "videodat_sink_stage.h"
+#include "plugin.h"
+#include "test_support.h"
 
-#include <iostream>
+#include <algorithm>
+#include <stdexcept>
+
+using orc::plugins::videodat::DecoderOptions;
+using orc::plugins::videodat::VideoDatSinkStage;
+
+namespace {
+
+const orc::ParameterDescriptor* find(const std::vector<orc::ParameterDescriptor>& d,
+                                     const std::string& name)
+{
+    for (const auto& p : d) {
+        if (p.name == name) return &p;
+    }
+    return nullptr;
+}
+
+bool has(const std::vector<std::string>& v, const std::string& s)
+{
+    return std::find(v.begin(), v.end(), s) != v.end();
+}
+
+std::string value_after(const std::vector<std::string>& v, const std::string& flag)
+{
+    auto it = std::find(v.begin(), v.end(), flag);
+    return (it == v.end() || it + 1 == v.end()) ? std::string() : *(it + 1);
+}
+
+bool throws(const std::map<std::string, orc::ParameterValue>& p)
+{
+    try {
+        VideoDatSinkStage::parse_options(p);
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+    return false;
+}
+
+} // namespace
 
 int main()
 {
-    orc::plugins::skeleton::SkeletonPassthroughStage stage;
-
+    VideoDatSinkStage stage;
     const auto info = stage.get_node_type_info();
-    if (info.stage_name != "skeleton_passthrough") {
-        std::cerr << "Unexpected stage_name: " << info.stage_name << '\n';
-        return 1;
+    CHECK(info.stage_name == "videodat_decoder");
+    CHECK(info.type == orc::NodeType::SINK);
+    CHECK(info.category() == orc::StageCategory::SINK);
+    CHECK(stage.required_input_count() == 1 && stage.output_count() == 0);
+    CHECK(!stage.get_preview_capability().is_valid());
+    CHECK(stage.get_configuration_status() == orc::ConfigurationStatus::Red);
+
+    const auto d = stage.get_parameter_descriptors(orc::VideoSystem::PAL, orc::SourceType::Unknown);
+
+    // Plain options are checkboxes.
+    for (const char* name : {"no_sync", "no_eq", "partial", "skip_services", "dump_other",
+                             "decrypt_services", "decrypt_files", "save_bytes"}) {
+        const auto* p = find(d, name);
+        CHECK(p != nullptr);
+        CHECK(p->type == orc::ParameterType::BOOL);
+    }
+    // Options of the 1993 format are greyed out (not hidden) for 1990.
+    for (const char* name : {"no_eq", "dump_other", "decrypt_services", "decrypt_files"}) {
+        const auto& dep = find(d, name)->constraints.depends_on;
+        CHECK(dep.has_value());
+        CHECK(dep->parameter_name == "variant");
+        CHECK(!dep->hide_when_disabled);
+        CHECK(has(dep->required_values, "1993") && has(dep->required_values, "auto"));
+        CHECK(!has(dep->required_values, "1990"));
+    }
+    // Dependencies must not form cycles (the host GUI cannot resolve them).
+    for (const auto& p : d) {
+        if (!p.constraints.depends_on) continue;
+        const auto* parent = find(d, p.constraints.depends_on->parameter_name);
+        CHECK(parent != nullptr);
+        CHECK(!parent->constraints.depends_on.has_value());
+    }
+    // Dropdown, integer, path fields.
+    CHECK(find(d, "variant")->constraints.allowed_strings.size() == 3);
+    CHECK(find(d, "scan_seconds")->type == orc::ParameterType::INT32);
+    CHECK(find(d, "output_path")->type == orc::ParameterType::FILE_PATH);
+    CHECK(find(d, "output_path")->output_path);
+    CHECK(find(d, "save_bytes_path")->type == orc::ParameterType::FILE_PATH);
+    CHECK(find(d, "save_bytes_path")->constraints.depends_on->parameter_name == "save_bytes");
+    // Path parameters must contain "_path" so the host resolves them against
+    // the project directory.
+    for (const auto& p : d) {
+        if (p.type == orc::ParameterType::FILE_PATH) {
+            CHECK(p.name.find("_path") != std::string::npos);
+        }
     }
 
-    if (info.type != orc::NodeType::TRANSFORM) {
-        std::cerr << "Expected TRANSFORM node type\n";
-        return 1;
-    }
+    stage.set_parameters({{"output_path", std::string("/tmp/x")}});
+    CHECK(stage.get_configuration_status() == orc::ConfigurationStatus::Green);
 
-    // ABI 12: the Add Stage menu category is derived from the node type by
-    // the SDK, never declared by the plugin.
-    if (info.category() != orc::StageCategory::TRANSFORM) {
-        std::cerr << "Expected the derived stage category to be Transform\n";
-        return 1;
-    }
+    // Option parsing and the decoder command line.
+    std::map<std::string, orc::ParameterValue> p = {
+        {"output_path", std::string("/data/tape006")},
+        {"variant", std::string("1993")},
+        {"lines", std::string(" 11, 12,13 324 ")},
+        {"scan_seconds", int32_t{12}},
+        {"no_eq", true},
+        {"partial", true},
+        {"dump_other", true},
+        {"decrypt_files", true},
+        {"save_bytes", true},
+    };
+    DecoderOptions o = VideoDatSinkStage::parse_options(p);
+    CHECK(o.lines == "11,12,13,324");
+    auto a = o.decoder_arguments("/data/tape006/.videodat_vbi.tbc");
+    CHECK(a.front() == "/data/tape006/.videodat_vbi.tbc");
+    CHECK(value_after(a, "-o") == "/data/tape006");
+    CHECK(value_after(a, "--format") == "tbc");
+    CHECK(value_after(a, "--variant") == "1993");
+    CHECK(value_after(a, "--lines") == "11,12,13,324");
+    CHECK(value_after(a, "--scan-seconds") == "12");
+    CHECK(value_after(a, "--tbc-field-lines") == "40");
+    CHECK(has(a, "--no-eq") && has(a, "--partial") && has(a, "--dump-other") &&
+          has(a, "--decrypt-files"));
+    CHECK(!has(a, "--no-sync") && !has(a, "--keine-dienste") && !has(a, "--decrypt-services"));
+    CHECK(value_after(a, "--save-bytes") == "/data/tape006/tape006.bytes");
 
-    if (stage.required_input_count() != 1 || stage.output_count() != 1) {
-        std::cerr << "Expected one input and one output\n";
-        return 1;
-    }
+    // 1990: the 1993-only options are dropped even if still ticked.
+    p["variant"] = std::string("1990");
+    a = VideoDatSinkStage::parse_options(p).decoder_arguments("x.tbc");
+    CHECK(!has(a, "--no-eq") && !has(a, "--dump-other") && !has(a, "--decrypt-files"));
+    CHECK(has(a, "--partial"));
 
-    // Before execute() has cached any frame data the preview capability
-    // must report is_valid() == false (Decode-Orc 2.x preview contract).
-    if (stage.get_preview_capability().is_valid()) {
-        std::cerr << "Preview capability must be invalid before execute()\n";
-        return 1;
-    }
+    // Explicit byte stream file; save_bytes off drops it.
+    p["save_bytes_path"] = std::string("/other/t.bytes");
+    CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
+          "/other/t.bytes");
+    p["save_bytes"] = false;
+    CHECK(!has(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes"));
 
+    // Invalid values.
+    CHECK(throws({}));
+    CHECK(throws({{"output_path", std::string("o")}, {"lines", std::string("11,abc")}}));
+    CHECK(throws({{"output_path", std::string("o")}, {"lines", std::string("200")}}));
+    CHECK(throws({{"output_path", std::string("o")}, {"variant", std::string("1995")}}));
+    CHECK(throws({{"output_path", std::string("o")}, {"scan_seconds", int32_t{0}}}));
+
+    std::cout << "stage smoke test passed\n";
     return 0;
 }

@@ -22,11 +22,11 @@
 
 int main()
 {
-    const auto& descriptor = orc::plugins::skeleton::kPluginDescriptor;
+    const auto& descriptor = orc::plugins::videodat::kPluginDescriptor;
 
     std::printf("plugin_id=%s\n", descriptor.plugin_id);
     std::printf("plugin_version=%s\n", descriptor.plugin_version);
-    std::printf("stage_name=%s\n", orc::plugins::skeleton::kStageName);
+    std::printf("stage_name=%s\n", orc::plugins::videodat::kStageName);
     std::printf("abi=%u\n", descriptor.host_abi_version);
     std::printf("api=%u\n", descriptor.plugin_api_version);
     std::printf("toolchain_tag=%s\n", descriptor.toolchain_tag);

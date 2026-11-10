@@ -1,5 +1,5 @@
 {
-  description = "Decode-Orc skeleton stage plugin";
+  description = "Decode-Orc VideoDat decoder stage plugin";
 
   # Keep the nixpkgs input aligned with the decode-orc host repository's
   # flake (github:decode-orc/decode-orc). Since Decode-Orc 2.0 (host ABI 5+)
@@ -57,7 +57,7 @@
           ];
 
           shellHook = ''
-            echo "orc-plugin_skeleton nix development environment"
+            echo "orc-plugin_videodat nix development environment"
             # Probe via $CXX, not a hardcoded g++: the Darwin stdenv is
             # clang-based and has no g++, so the name would fall through to
             # Apple's /usr/bin/g++ xcrun shim and fail.
