@@ -50,6 +50,9 @@ int main(int argc, char** argv)
     CHECK(text.find("\"isFirstField\": true") != std::string::npos);
     CHECK(text.find("\"isFirstField\": false") != std::string::npos);
 
+    // Windows refuses to delete files that are still open.
+    in.close();
+    js.close();
     std::filesystem::remove(path);
     std::filesystem::remove(path + ".json");
     std::cout << "writer test passed\n";

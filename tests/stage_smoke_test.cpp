@@ -122,7 +122,9 @@ int main()
     CHECK(has(a, "--no-eq") && has(a, "--partial") && has(a, "--dump-other") &&
           has(a, "--decrypt-files"));
     CHECK(!has(a, "--no-sync") && !has(a, "--keine-dienste") && !has(a, "--decrypt-services"));
-    CHECK(value_after(a, "--save-bytes") == "/data/tape006/tape006.bin");
+    const auto native = [](const std::string& s) { return std::filesystem::path(s).string(); };
+    CHECK(native(value_after(a, "--save-bytes")) ==
+          (std::filesystem::path("/data/tape006") / "tape006.bin").string());
 
     // 1990: the 1993-only options are dropped even if still ticked.
     p["variant"] = std::string("1990");
@@ -143,7 +145,7 @@ int main()
     }
     p["save_bytes_path"] = std::string("/not/there/");
     CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
-          "/not/there/tape006.bin");
+          (std::filesystem::path("/not/there/") / "tape006.bin").string());
     p["save_bytes_path"] = std::string("/other/tape006_stream");
     CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
           "/other/tape006_stream.bin");
