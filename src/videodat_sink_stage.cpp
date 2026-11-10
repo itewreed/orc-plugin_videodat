@@ -57,6 +57,7 @@ constexpr const char* kBundledScriptDir = "videodat-decoder";
 constexpr const char* kScriptName = "videodat_decoder.py";
 constexpr const char* kLogName = "videodat_decoder.log";
 constexpr const char* kTempTbcName = ".videodat_vbi.tbc";
+constexpr const char* kByteStreamExtension = ".bin";
 
 template <typename T>
 T get_or(const std::map<std::string, ParameterValue>& p, const std::string& name, T fallback)
@@ -146,20 +147,34 @@ std::string DecoderOptions::effective_save_bytes_path() const
     if (!save_bytes) {
         return {};
     }
-    if (!save_bytes_path.empty()) {
-        return save_bytes_path;
-    }
-    // The plugin is not told the name of the input file, so the default is
-    // named after the output directory, which usually is named after the tape.
-    fs::path dir(output_dir);
-    std::string stem = dir.filename().string();
+    // The plugin is not told the name of the input file, so the default name
+    // is taken from the output directory, which usually is named after the
+    // tape.
+    fs::path out(output_dir);
+    std::string stem = out.filename().string();
     if (stem.empty() || stem == "." || stem == "..") {
-        stem = dir.parent_path().filename().string();
+        stem = out.parent_path().filename().string();
     }
     if (stem.empty()) {
         stem = "videodat";
     }
-    return (dir / (stem + ".bytes")).string();
+    const std::string default_name = stem + kByteStreamExtension;
+
+    if (save_bytes_path.empty()) {
+        return (out / default_name).string();
+    }
+    // A directory (existing, or written with a trailing separator) gets the
+    // default file name inside it, instead of the decoder failing to open it.
+    std::error_code ec;
+    const char last = save_bytes_path.back();
+    if (last == '/' || last == '\\' || fs::is_directory(save_bytes_path, ec)) {
+        return (fs::path(save_bytes_path) / default_name).string();
+    }
+    fs::path file(save_bytes_path);
+    if (!file.has_extension()) {
+        file += kByteStreamExtension;
+    }
+    return file.string();
 }
 
 std::vector<std::string> DecoderOptions::decoder_arguments(const std::string& tbc_path) const
@@ -329,11 +344,12 @@ std::vector<ParameterDescriptor> VideoDatSinkStage::get_parameter_descriptors(
         p.display_name = "Byte Stream File";
         p.description =
             "File for the byte stream. Empty: <output directory>/<name of the output "
-            "directory>.bytes. 1990 recordings get one file per channel, named "
-            "<file>_zeilen_<lines>.bytes.";
+            "directory>.bin. A directory gets that file name inside it; a name without "
+            "extension gets .bin. 1990 recordings get one file per channel, named "
+            "<file>_zeilen_<lines>.bin.";
         p.type = ParameterType::FILE_PATH;
         p.output_path = true;
-        p.file_extension_hint = ".bytes";
+        p.file_extension_hint = ".bin";
         p.constraints.default_value = std::string("");
         p.constraints.depends_on = ParameterDependency{kSaveBytes, {"true"}, false};
         d.push_back(p);

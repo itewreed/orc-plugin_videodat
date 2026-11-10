@@ -3,6 +3,7 @@
 #include "test_support.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 
 using orc::plugins::videodat::DecoderOptions;
@@ -121,7 +122,7 @@ int main()
     CHECK(has(a, "--no-eq") && has(a, "--partial") && has(a, "--dump-other") &&
           has(a, "--decrypt-files"));
     CHECK(!has(a, "--no-sync") && !has(a, "--keine-dienste") && !has(a, "--decrypt-services"));
-    CHECK(value_after(a, "--save-bytes") == "/data/tape006/tape006.bytes");
+    CHECK(value_after(a, "--save-bytes") == "/data/tape006/tape006.bin");
 
     // 1990: the 1993-only options are dropped even if still ticked.
     p["variant"] = std::string("1990");
@@ -133,6 +134,19 @@ int main()
     p["save_bytes_path"] = std::string("/other/t.bytes");
     CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
           "/other/t.bytes");
+    // A directory gets the default name inside it; no extension gets .bin.
+    {
+        const auto tmp = std::filesystem::temp_directory_path();
+        p["save_bytes_path"] = tmp.string();
+        CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"),
+                          "--save-bytes") == (tmp / "tape006.bin").string());
+    }
+    p["save_bytes_path"] = std::string("/not/there/");
+    CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
+          "/not/there/tape006.bin");
+    p["save_bytes_path"] = std::string("/other/tape006_stream");
+    CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
+          "/other/tape006_stream.bin");
     p["save_bytes"] = false;
     CHECK(!has(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes"));
 

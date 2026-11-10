@@ -52,7 +52,7 @@ Python 3 with `numpy` (and `Pillow` for the bit-list images). Set
 | Decrypt Services | `--decrypt-services` | 1993 only |
 | Decrypt Files | `--decrypt-files` | 1993 only, paid software to `decrypted_files/` |
 | Save Byte Stream | `--save-bytes` | Byte stream for later runs with `--bytes` |
-| Byte Stream File | | Empty = `<output directory>/<directory name>.bytes` |
+| Byte Stream File | | Empty = `<output directory>/<directory name>.bin`. A directory gets that file name inside it; a name without extension gets `.bin` |
 
 Options that exist only for the 1993 format are greyed out while Variant is
 set to 1990. With Variant on Automatic they stay available; the decoder

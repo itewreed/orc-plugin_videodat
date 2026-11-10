@@ -33,7 +33,7 @@ struct DecoderOptions {
     bool decrypt_services{false};
     bool decrypt_files{false};
     bool save_bytes{false};
-    std::string save_bytes_path;  // "" = <output_dir>/<dir name>.bytes
+    std::string save_bytes_path;  // "" = <output_dir>/<dir name>.bin
     std::string python{"python3"};
     std::string decoder_script;   // "" = bundled copy next to the plugin
 

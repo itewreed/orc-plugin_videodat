@@ -87,7 +87,7 @@ int main(int argc, char** argv)
     const std::string args = slurp(base / "args.txt");
     CHECK(args.find("--format tbc") != std::string::npos);
     CHECK(args.find("--tbc-field-lines 40") != std::string::npos);
-    CHECK(args.find("--save-bytes " + (out / "out.bytes").string()) != std::string::npos);
+    CHECK(args.find("--save-bytes " + (out / "out.bin").string()) != std::string::npos);
     // 4 frames = 8 fields of 40 lines x 1135 samples x 2 bytes.
     CHECK(std::stol(slurp(base / "size.txt")) == 8L * 40 * 1135 * 2);
     // The intermediate file is gone, the log is there.
