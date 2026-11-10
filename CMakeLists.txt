@@ -28,6 +28,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BUILD_TESTS "Build plugin tests" ON)
 
+# The SDK's stage_instructions.h includes <windows.h>, whose min/max macros
+# break std::numeric_limits<>::max() in later SDK headers.
+if(WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 # channel-videodat-decoder checkout whose Python scripts are copied next to
 # the plugin (videodat-decoder/), where the stage looks for them by default.
 set(VIDEODAT_DECODER_DIR "" CACHE PATH
