@@ -46,6 +46,31 @@ orc-cli --source tbc_source=input_path=tape.tbc \
 or start `orc-gui` with the same environment variable and add the stage from
 the Sink menu.
 
+## Build for the decode-orc Flatpak
+
+The Flatpak (io.github.decode_orc.decode-orc, v2.11.1, KDE runtime 6.9) is
+built with gcc 14, so the plugin must be too (toolchain tag
+`gcc14/libstdc++`). Build against the SDK headers of the installed release
+with nixpkgs' gcc 14:
+
+```bash
+git -C /path/to/decode-orc archive v2.11.1 orc/sdk | tar -x -C /tmp/orc-v2.11.1
+GCC14=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#gcc14)
+nix develop --command bash -c "CXX=$GCC14/bin/g++ CC=$GCC14/bin/gcc \
+    cmake -S . -B build-flatpak -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DORC_INTREE_SDK_DIR=/tmp/orc-v2.11.1 \
+    -DVIDEODAT_DECODER_DIR=/path/to/channel-videodat-decoder \
+    && cmake --build build-flatpak"
+ORC_STAGE_PLUGIN_PATHS=$PWD/build-flatpak/lib/orc-stage-plugins \
+    flatpak run io.github.decode_orc.decode-orc
+```
+
+Inside the sandbox `/usr/bin/python3` is the runtime's Python 3.12 without
+numpy. A virtual environment in the home directory made with a Python 3.12
+(for example on Ubuntu 24.04) works there too: set **Python Interpreter** to
+its `bin/python`. Output directories must be inside the home directory, which
+is all the Flatpak can write to.
+
 ## Limits
 
 - Python is needed at run time, so a binary installed through decode-orc's
