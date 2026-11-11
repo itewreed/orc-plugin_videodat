@@ -1,14 +1,17 @@
-// Runs the whole trigger with a stand-in for the decoder: "python" is sh and
-// the "script" records its arguments and the size of the TBC file it gets.
+// Runs the whole stage on a synthetic VideoDat signal: one file sent in a
+// loop, which the built-in decoder has to find, slice and reassemble.
 #include "videodat_sink_stage.h"
 #include "test_support.h"
 
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <optional>
 
 namespace fs = std::filesystem;
 using orc::plugins::videodat::VideoDatSinkStage;
+using videodat_test::make_packet;
 
 namespace {
 
@@ -34,43 +37,59 @@ public:
     void clear_schema() override {}
 };
 
-std::string slurp(const fs::path& p)
+std::vector<uint8_t> slurp(const fs::path& p)
 {
-    std::ifstream in(p);
-    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::ifstream in(p, std::ios::binary);
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+std::string text(const fs::path& p)
+{
+    const auto b = slurp(p);
+    return std::string(b.begin(), b.end());
 }
 
 } // namespace
 
 int main(int argc, char** argv)
 {
-#if defined(_WIN32)
-    std::cout << "trigger test skipped on Windows\n";
-    return 0;
-#else
+    // The file and its transmission: header, two data blocks, end mark.
+    std::vector<uint8_t> content(300);
+    for (size_t i = 0; i < content.size(); ++i) content[i] = static_cast<uint8_t>((i * 7 + 3) & 0xFF);
+    const uint32_t dos = (uint32_t{((1993 - 1980) << 9) | (12 << 5) | 16} << 16) | (12u << 11);
+    std::vector<uint8_t> stream;
+    uint8_t C = 0;
+    for (int cycle = 0; cycle < 40; ++cycle) {
+        std::vector<uint8_t> head = {0x02, 1, 2, 3, 4};
+        for (int i = 0; i < 4; ++i) head.push_back(static_cast<uint8_t>(content.size() >> (8 * i)));
+        for (int i = 0; i < 4; ++i) head.push_back(static_cast<uint8_t>(dos >> (8 * i)));
+        const std::string name = "TEST.TXT";
+        head.push_back(static_cast<uint8_t>(name.size()));
+        head.insert(head.end(), name.begin(), name.end());
+        auto add = [&](const std::vector<uint8_t>& pay) {
+            const auto p = make_packet(0x41, 0, C++, pay);
+            stream.insert(stream.end(), p.begin(), p.end());
+            stream.insert(stream.end(), 13, 0x00);  // filler between packets
+        };
+        add(head);
+        for (size_t blk = 0; blk < 2; ++blk) {
+            std::vector<uint8_t> pay = {0x04};
+            for (size_t i = 0; i < 255; ++i) {
+                const size_t k = blk * 255 + i;
+                pay.push_back(k < content.size() ? content[k] : 0);
+            }
+            add(pay);
+        }
+        add({0x03, 1, 2, 3, 4, 0, 0, 0});
+    }
+    const size_t frames = stream.size() / 60 + 1;
+    auto source = std::make_shared<videodat_test::SyntheticVideoDat>(frames, stream);
+
     const fs::path base = fs::absolute(argc > 1 ? argv[1] : ".") / "trigger_test";
     fs::remove_all(base);
-    fs::create_directories(base);
-    const fs::path script = base / "fake_decoder.sh";
-    {
-        std::ofstream s(script);
-        s << "#!/bin/sh\n"
-             "# sh -u <script> <tbc> ...: $1 is the TBC file\n"
-             "out=$(dirname \"$0\")/args.txt\n"
-             "echo \"$@\" > \"$out\"\n"
-             "wc -c < \"$1\" > \"$(dirname \"$0\")/size.txt\"\n"
-             "echo 'Variante 1993'\n"
-             "echo '2 Dateien, davon 1 vollstaendig'\n"
-             "exit 0\n";
-    }
-    // sh ignores -u's argument semantics: "sh -u script" runs the script
-    // with unset-variable checking, which the script does not trip.
-    auto source = std::make_shared<videodat_test::SyntheticPal>(4);
-    const fs::path out = base / "out";
+    const fs::path out = base / "tape";
     std::map<std::string, orc::ParameterValue> params = {
         {"output_path", out.string()},
-        {"python", std::string("sh")},
-        {"decoder_script_path", script.string()},
         {"save_bytes", true},
     };
 
@@ -82,41 +101,41 @@ int main(int argc, char** argv)
     std::cout << stage.get_trigger_status() << '\n';
     CHECK(ok);
     CHECK(calls > 0);
-    CHECK(stage.get_trigger_status().find("2 Dateien, davon 1 vollstaendig") != std::string::npos);
+    CHECK(stage.get_trigger_status().find("1 Dateien, davon 1 vollstaendig") != std::string::npos);
+    CHECK(slurp(out / "strom_41" / "TEST.TXT") == content);
+    const std::string log = text(out / "videodat_decoder.log");
+    CHECK(log.find("VideoDat-Zeilen (automatisch, Bildzeilen PAL): [11, 12, 13, 324, 325, 326]") != std::string::npos);
+    CHECK(log.find("Variante 1993") != std::string::npos);
+    // The byte stream is the transmitted one.
+    const auto bytes = slurp(out / "tape.bin");
+    CHECK(bytes.size() >= stream.size());
+    CHECK(std::equal(stream.begin(), stream.end(), bytes.begin()));
+    CHECK(fs::exists(out / "dienste" / "dienste.txt"));
 
-    const std::string args = slurp(base / "args.txt");
-    CHECK(args.find("--format tbc") != std::string::npos);
-    CHECK(args.find("--tbc-field-lines 40") != std::string::npos);
-    CHECK(args.find("--save-bytes " + (out / "out.bin").string()) != std::string::npos);
-    // 4 frames = 8 fields of 40 lines x 1135 samples x 2 bytes.
-    CHECK(std::stol(slurp(base / "size.txt")) == 8L * 40 * 1135 * 2);
-    // The intermediate file is gone, the log is there.
-    CHECK(!fs::exists(out / ".videodat_vbi.tbc"));
-    CHECK(!fs::exists(out / ".videodat_vbi.tbc.json"));
-    CHECK(slurp(out / "videodat_decoder.log").find("Variante 1993") != std::string::npos);
+    // Given lines, no equalizer, 1990 forced: the 1993 options are dropped and
+    // nothing decodes, but the run succeeds.
+    params["variant"] = std::string("1990");
+    params["lines"] = std::string("11,12,13,324,325,326");
+    params["decrypt_files"] = true;
+    CHECK(stage.trigger({source}, params, ctx));
+    CHECK(text(out / "videodat_decoder.log").find("Entzerrer: fuer Variante 1990 nicht verwendet") !=
+          std::string::npos);
 
-    // A failing decoder is reported with its last line.
+    // Missing output directory.
+    CHECK(!stage.trigger({source}, {}, ctx));
+    CHECK(stage.get_trigger_status().find("output directory") != std::string::npos);
+
+    // Cancel before the run: the decoder stops at its first check.
     {
-        std::ofstream s(script);
-        s << "#!/bin/sh\necho 'ModuleNotFoundError: numpy'\nexit 1\n";
+        VideoDatSinkStage s2;
+        s2.set_progress_callback([&](size_t, size_t, const std::string&) { s2.cancel_trigger(); });
+        params.erase("variant");
+        params.erase("lines");
+        CHECK(!s2.trigger({source}, params, ctx));
+        CHECK(s2.get_trigger_status() == "Cancelled");
     }
-    CHECK(!stage.trigger({source}, params, ctx));
-    CHECK(stage.get_trigger_status().find("numpy") != std::string::npos);
-    CHECK(!fs::exists(out / ".videodat_vbi.tbc"));
-
-    // Missing interpreter.
-    params["python"] = std::string("no-such-python-xyz");
-    CHECK(!stage.trigger({source}, params, ctx));
-    std::cout << stage.get_trigger_status() << '\n';
-
-    // Missing script.
-    params["python"] = std::string("sh");
-    params["decoder_script_path"] = (base / "missing.py").string();
-    CHECK(!stage.trigger({source}, params, ctx));
-    CHECK(stage.get_trigger_status().find("not found") != std::string::npos);
 
     fs::remove_all(base);
     std::cout << "trigger test passed\n";
     return 0;
-#endif
 }

@@ -20,12 +20,18 @@ endfunction()
 
 set(_stage_sources
     ../src/videodat_sink_stage.cpp
-    ../src/vbi_tbc_writer.cpp
-    ../src/decoder_process.cpp
+    ../src/decoder/vd_util.cpp
+    ../src/decoder/vd_json.cpp
+    ../src/decoder/vd_prng.cpp
+    ../src/decoder/vd_crypto.cpp
+    ../src/decoder/vd_packets.cpp
+    ../src/decoder/vd_signal.cpp
+    ../src/decoder/vd_assemble.cpp
+    ../src/decoder/vd_1990.cpp
+    ../src/decoder/vd_decoder.cpp
 )
 
 videodat_add_test(videodat_stage_smoke_test stage_smoke_test.cpp ${_stage_sources})
-videodat_add_test(videodat_writer_test vbi_tbc_writer_test.cpp ../src/vbi_tbc_writer.cpp)
 videodat_add_test(videodat_trigger_test trigger_test.cpp ${_stage_sources})
 videodat_add_test(videodat_plugin_entrypoints_test plugin_entrypoints_test.cpp
     ../src/plugin.cpp ${_stage_sources})

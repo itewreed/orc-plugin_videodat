@@ -25,11 +25,6 @@ bool has(const std::vector<std::string>& v, const std::string& s)
     return std::find(v.begin(), v.end(), s) != v.end();
 }
 
-std::string value_after(const std::vector<std::string>& v, const std::string& flag)
-{
-    auto it = std::find(v.begin(), v.end(), flag);
-    return (it == v.end() || it + 1 == v.end()) ? std::string() : *(it + 1);
-}
 
 bool throws(const std::map<std::string, orc::ParameterValue>& p)
 {
@@ -97,7 +92,7 @@ int main()
     stage.set_parameters({{"output_path", std::string("/tmp/x")}});
     CHECK(stage.get_configuration_status() == orc::ConfigurationStatus::Green);
 
-    // Option parsing and the decoder command line.
+    // Option parsing and the decoder options.
     std::map<std::string, orc::ParameterValue> p = {
         {"output_path", std::string("/data/tape006")},
         {"variant", std::string("1993")},
@@ -111,51 +106,42 @@ int main()
     };
     DecoderOptions o = VideoDatSinkStage::parse_options(p);
     CHECK(o.lines == "11,12,13,324");
-    auto a = o.decoder_arguments("/data/tape006/.videodat_vbi.tbc");
-    CHECK(a.front() == "/data/tape006/.videodat_vbi.tbc");
-    CHECK(value_after(a, "-o") == "/data/tape006");
-    CHECK(value_after(a, "--format") == "tbc");
-    CHECK(value_after(a, "--variant") == "1993");
-    CHECK(value_after(a, "--lines") == "11,12,13,324");
-    CHECK(value_after(a, "--scan-seconds") == "12");
-    CHECK(value_after(a, "--tbc-field-lines") == "40");
-    CHECK(has(a, "--no-eq") && has(a, "--partial") && has(a, "--dump-other") &&
-          has(a, "--decrypt-files"));
-    CHECK(!has(a, "--no-sync") && !has(a, "--keine-dienste") && !has(a, "--decrypt-services"));
-    const auto native = [](const std::string& s) { return std::filesystem::path(s).string(); };
-    CHECK(native(value_after(a, "--save-bytes")) ==
-          (std::filesystem::path("/data/tape006") / "tape006.bin").string());
+    auto a = o.decode_options();
+    CHECK(a.outdir == "/data/tape006");
+    CHECK(a.variant == "1993");
+    CHECK((a.lines == std::vector<int>{11, 12, 13, 324}));
+    CHECK(a.scan_seconds == 12);
+    CHECK(a.no_eq && a.partial && a.dump_other && a.decrypt_files);
+    CHECK(!a.no_sync && !a.keine_dienste && !a.decrypt_services);
+    CHECK(a.save_bytes == (std::filesystem::path("/data/tape006") / "tape006.bin").string());
 
     // 1990: the 1993-only options are dropped even if still ticked.
     p["variant"] = std::string("1990");
-    a = VideoDatSinkStage::parse_options(p).decoder_arguments("x.tbc");
-    CHECK(!has(a, "--no-eq") && !has(a, "--dump-other") && !has(a, "--decrypt-files"));
-    CHECK(has(a, "--partial"));
+    a = VideoDatSinkStage::parse_options(p).decode_options();
+    CHECK(!a.no_eq && !a.dump_other && !a.decrypt_files);
+    CHECK(a.partial);
 
-    // Explicit byte stream file; save_bytes off drops it.
+    // Explicit byte stream file; a directory gets the default name inside it;
+    // no extension gets .bin; save_bytes off drops it.
     p["save_bytes_path"] = std::string("/other/t.bytes");
-    CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
-          "/other/t.bytes");
-    // A directory gets the default name inside it; no extension gets .bin.
+    CHECK(VideoDatSinkStage::parse_options(p).decode_options().save_bytes == "/other/t.bytes");
     {
         const auto tmp = std::filesystem::temp_directory_path();
         p["save_bytes_path"] = tmp.string();
-        CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"),
-                          "--save-bytes") == (tmp / "tape006.bin").string());
+        CHECK(VideoDatSinkStage::parse_options(p).decode_options().save_bytes == (tmp / "tape006.bin").string());
     }
     p["save_bytes_path"] = std::string("/not/there/");
-    CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
+    CHECK(VideoDatSinkStage::parse_options(p).decode_options().save_bytes ==
           (std::filesystem::path("/not/there/") / "tape006.bin").string());
     p["save_bytes_path"] = std::string("/other/tape006_stream");
-    CHECK(value_after(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes") ==
-          "/other/tape006_stream.bin");
+    CHECK(VideoDatSinkStage::parse_options(p).decode_options().save_bytes == "/other/tape006_stream.bin");
     p["save_bytes"] = false;
-    CHECK(!has(VideoDatSinkStage::parse_options(p).decoder_arguments("x"), "--save-bytes"));
+    CHECK(VideoDatSinkStage::parse_options(p).decode_options().save_bytes.empty());
 
     // Invalid values.
     CHECK(throws({}));
     CHECK(throws({{"output_path", std::string("o")}, {"lines", std::string("11,abc")}}));
-    CHECK(throws({{"output_path", std::string("o")}, {"lines", std::string("200")}}));
+    CHECK(throws({{"output_path", std::string("o")}, {"lines", std::string("700")}}));
     CHECK(throws({{"output_path", std::string("o")}, {"variant", std::string("1995")}}));
     CHECK(throws({{"output_path", std::string("o")}, {"scan_seconds", int32_t{0}}}));
 

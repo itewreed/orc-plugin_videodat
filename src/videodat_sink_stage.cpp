@@ -8,13 +8,12 @@
 
 #include "videodat_sink_stage.h"
 
-#include "decoder_process.h"
 #include "plugin.h"
-#include "vbi_tbc_writer.h"
 
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 #include <variant>
 
@@ -39,24 +38,30 @@ constexpr const char* kDecryptServices = "decrypt_services";
 constexpr const char* kDecryptFiles = "decrypt_files";
 constexpr const char* kSaveBytes = "save_bytes";
 constexpr const char* kSaveBytesPath = "save_bytes_path";
-constexpr const char* kPython = "python";
-constexpr const char* kDecoderScriptPath = "decoder_script_path";
 
 // Combo entries may carry a label after this separator (host convention).
 constexpr char kLabelSeparator = '\x1f';
 
 constexpr int32_t kMaxScanSeconds = 3600;
 
-// The decoder searches lines 1..40 of each field (frame lines 1-40 and
-// 314-353), which is all the stage hands it.
-constexpr int32_t kLastFirstFieldLine = 40;
-constexpr int32_t kFirstSecondFieldLine = 314;
-constexpr int32_t kLastSecondFieldLine = 353;
+// One CVBS_U10_4FSC sample in the 16-bit TBC domain (10-bit value << 6) of
+// ld-decode/vhs-decode, which the decoder's thresholds are written for.
+inline uint16_t cvbs_to_tbc_sample(int16_t v)
+{
+    if (v < 0) {
+        v = 0;
+    } else if (v > 1023) {
+        v = 1023;
+    }
+    return static_cast<uint16_t>(static_cast<uint16_t>(v) << 6);
+}
 
-constexpr const char* kBundledScriptDir = "videodat-decoder";
-constexpr const char* kScriptName = "videodat_decoder.py";
+// PAL frame lines: first field 1-313, second field 314-625.
+constexpr int32_t kLastFirstFieldLine = 313;
+constexpr int32_t kFirstSecondFieldLine = 314;
+constexpr int32_t kLastSecondFieldLine = 625;
+
 constexpr const char* kLogName = "videodat_decoder.log";
-constexpr const char* kTempTbcName = ".videodat_vbi.tbc";
 constexpr const char* kByteStreamExtension = ".bin";
 
 template <typename T>
@@ -102,8 +107,7 @@ std::string normalise_lines(const std::string& raw)
         const bool ok = (n >= 1 && n <= kLastFirstFieldLine) ||
                         (n >= kFirstSecondFieldLine && n <= kLastSecondFieldLine);
         if (!ok) {
-            throw std::runtime_error("Lines: " + t + " is outside the VBI range the stage passes "
-                                     "to the decoder (1-40 and 314-353)");
+            throw std::runtime_error("Lines: " + t + " is not a PAL frame line (1-625)");
         }
         out += (out.empty() ? "" : ",") + t;
     };
@@ -177,29 +181,73 @@ std::string DecoderOptions::effective_save_bytes_path() const
     return file.string();
 }
 
-std::vector<std::string> DecoderOptions::decoder_arguments(const std::string& tbc_path) const
+::videodat::DecodeOptions DecoderOptions::decode_options() const
 {
     const bool v1993 = variant != "1990";
-    std::vector<std::string> a = {tbc_path, "--format", "tbc", "-o", output_dir};
-    a.insert(a.end(), {"--variant", variant});
-    if (!lines.empty()) {
-        a.insert(a.end(), {"--lines", lines});
+    ::videodat::DecodeOptions o;
+    o.outdir = output_dir;
+    o.variant = variant;
+    size_t p = 0;
+    while (p < lines.size()) {
+        const size_t q = lines.find(',', p);
+        o.lines.push_back(std::stoi(lines.substr(p, q == std::string::npos ? std::string::npos : q - p)));
+        if (q == std::string::npos) break;
+        p = q + 1;
     }
-    a.insert(a.end(), {"--scan-seconds", std::to_string(scan_seconds)});
-    // The intermediate file carries 40 lines per field.
-    a.insert(a.end(), {"--tbc-field-lines", std::to_string(kTbcFieldLines)});
-    if (no_sync) a.push_back("--no-sync");
-    if (no_eq && v1993) a.push_back("--no-eq");
-    if (partial) a.push_back("--partial");
-    if (skip_services) a.push_back("--keine-dienste");
-    if (dump_other && v1993) a.push_back("--dump-other");
-    if (decrypt_services && v1993) a.push_back("--decrypt-services");
-    if (decrypt_files && v1993) a.push_back("--decrypt-files");
-    const std::string bytes = effective_save_bytes_path();
-    if (!bytes.empty()) {
-        a.insert(a.end(), {"--save-bytes", bytes});
+    o.scan_seconds = scan_seconds;
+    o.no_sync = no_sync;
+    o.no_eq = no_eq && v1993;
+    o.partial = partial;
+    o.keine_dienste = skip_services;
+    o.dump_other = dump_other && v1993;
+    o.decrypt_services = decrypt_services && v1993;
+    o.decrypt_files = decrypt_files && v1993;
+    o.save_bytes = effective_save_bytes_path();
+    return o;
+}
+
+// ---------------------------------------------------------------------------
+// RepresentationFields
+// ---------------------------------------------------------------------------
+
+RepresentationFields::RepresentationFields(const VideoFrameRepresentation& source) : source_(source)
+{
+    const auto params = source.get_video_parameters();
+    const FrameIDRange range = source.frame_range();
+    first_ = range.first;
+    fields_ = static_cast<size_t>(range.count()) * 2;
+    if (params && params->is_valid()) {
+        width_ = static_cast<size_t>(params->frame_width_nominal);
+        frame_height_ = static_cast<size_t>(params->frame_height);
+        field1_lines_ = field1_lines(params->system);
+        // Field lines as the TBC files of ld-decode/vhs-decode count them.
+        field_lines_ = field1_lines_;
     }
-    return a;
+    yc_ = source.has_separate_channels();
+}
+
+void RepresentationFields::read_line(size_t fi, size_t li, double* out) const
+{
+    const FrameID frame = first_ + fi / 2;
+    const size_t frame_line = (fi % 2 == 0 ? 0 : field1_lines_) + li;
+    if (frame_line >= frame_height_ || !source_.has_frame(frame)) {
+        std::fill(out, out + width_, 0.0);
+        return;
+    }
+    if (yc_) {
+        // Y/C sources: VideoDat is a luma signal.
+        const auto* line = source_.get_line_luma(frame, frame_line);
+        for (size_t i = 0; i < width_; ++i) {
+            out[i] = line ? static_cast<double>(cvbs_to_tbc_sample(line[i])) : 0.0;
+        }
+        return;
+    }
+    // get_line_samples() lets the source read single lines instead of whole
+    // frames, which is most of the cost of reading the VBI.
+    const auto line = source_.get_line_samples(frame, frame_line);
+    for (size_t i = 0; i < width_; ++i) {
+        out[i] = i < line.size() ? static_cast<double>(cvbs_to_tbc_sample(line[i])) : 0.0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,8 +268,8 @@ NodeTypeInfo VideoDatSinkStage::get_node_type_info() const
 {
     return NodeTypeInfo{
         kStageNodeType, kStageName, kStageDisplayName,
-        "Decodes Pro7 VideoDat (1990-1994) from the VBI with videodat_decoder.py and "
-        "writes the received files and services. Trigger to run the decoder.",
+        "Decodes Pro7 VideoDat (1990-1994) from the VBI and writes the received files and "
+        "services. Trigger to run the decoder.",
         kStageMinInputs, kStageMaxInputs, kStageMinOutputs, kStageMaxOutputs,
         kStageCompatibleFormats};
 }
@@ -277,7 +325,7 @@ std::vector<ParameterDescriptor> VideoDatSinkStage::get_parameter_descriptors(
         p.display_name = "Lines (--lines)";
         p.description =
             "PAL frame lines carrying VideoDat, comma separated, e.g. 11,12,13,324,325,326. "
-            "Empty: detect them automatically. Allowed are 1-40 and 314-353.";
+            "Empty: detect them automatically (among the first 40 lines of each field).";
         p.type = ParameterType::STRING;
         p.constraints.default_value = std::string("");
         d.push_back(p);
@@ -354,29 +402,6 @@ std::vector<ParameterDescriptor> VideoDatSinkStage::get_parameter_descriptors(
         p.constraints.depends_on = ParameterDependency{kSaveBytes, {"true"}, false};
         d.push_back(p);
     }
-    {
-        ParameterDescriptor p;
-        p.name = kPython;
-        p.display_name = "Python Interpreter";
-        p.description =
-            "Python 3 with numpy (and Pillow for the bit list images), e.g. python3 or the "
-            "python of a virtual environment.";
-        p.type = ParameterType::STRING;
-        p.constraints.default_value = std::string("python3");
-        d.push_back(p);
-    }
-    {
-        ParameterDescriptor p;
-        p.name = kDecoderScriptPath;
-        p.display_name = "Decoder Script";
-        p.description =
-            "videodat_decoder.py from the channel-videodat-decoder repository. Empty: the copy "
-            "installed with the plugin (videodat-decoder/ next to the plugin library).";
-        p.type = ParameterType::FILE_PATH;
-        p.file_extension_hint = ".py";
-        p.constraints.default_value = std::string("");
-        d.push_back(p);
-    }
     return d;
 }
 
@@ -420,11 +445,6 @@ DecoderOptions VideoDatSinkStage::parse_options(
     o.decrypt_files = get_or<bool>(p, kDecryptFiles, false);
     o.save_bytes = get_or<bool>(p, kSaveBytes, false);
     o.save_bytes_path = trim(get_or<std::string>(p, kSaveBytesPath, ""));
-    o.python = trim(get_or<std::string>(p, kPython, "python3"));
-    if (o.python.empty()) {
-        o.python = "python3";
-    }
-    o.decoder_script = trim(get_or<std::string>(p, kDecoderScriptPath, ""));
     return o;
 }
 
@@ -455,16 +475,7 @@ bool VideoDatSinkStage::trigger(const std::vector<ArtifactPtr>& inputs,
     cancel_requested_.store(false);
     set_status("Starting VideoDat decoder...");
 
-    fs::path tbc_path;
-    auto cleanup = [&]() {
-        std::error_code ec;
-        if (!tbc_path.empty()) {
-            fs::remove(tbc_path, ec);
-            fs::remove(fs::path(tbc_path.string() + ".json"), ec);
-        }
-    };
     auto fail = [&](const std::string& status) {
-        cleanup();
         set_status(status);
         is_processing_.store(false);
         return false;
@@ -487,105 +498,55 @@ bool VideoDatSinkStage::trigger(const std::vector<ArtifactPtr>& inputs,
         }
 
         const DecoderOptions options = parse_options(parameters);
-
-        // Locate the decoder before spending time on the extraction.
-        std::string script = options.decoder_script;
-        if (script.empty()) {
-            script = (fs::path(plugin_directory()) / kBundledScriptDir / kScriptName).string();
-        }
-        if (!fs::exists(script)) {
-            return fail("Error: decoder script not found: " + script +
-                        " (set Decoder Script to videodat_decoder.py)");
-        }
-
         std::error_code ec;
-        fs::create_directories(options.output_dir, ec);
-        if (ec || !fs::is_directory(options.output_dir)) {
+        fs::create_directories(fs::u8path(options.output_dir), ec);
+        if (ec || !fs::is_directory(fs::u8path(options.output_dir))) {
             return fail("Error: cannot create output directory " + options.output_dir);
         }
 
-        // 1) VBI lines of every field into the intermediate TBC file.
-        tbc_path = fs::path(options.output_dir) / kTempTbcName;
-        VbiTbcWriter writer;
-        if (!writer.open(tbc_path.string(), static_cast<size_t>(params->frame_width_nominal))) {
-            return fail("Error: " + writer.error());
-        }
-        const FrameIDRange range = source->frame_range();
-        const size_t total = static_cast<size_t>(range.count());
-        size_t done = 0;
-        for (FrameID id = range.first; total > 0 && id <= range.last; ++id) {
-            if (cancel_requested_.load()) {
-                writer.close();
-                return fail("Cancelled");
-            }
-            if (source->has_frame(id) && !writer.write_frame(*source, id)) {
-                writer.close();
-                return fail("Error: " + writer.error());
-            }
-            ++done;
-            if (done % 250 == 0 || done == total) {
-                report(done, total * 2, "Reading VBI lines: frame " + std::to_string(done) +
-                                            " of " + std::to_string(total));
-            }
-        }
-        if (!writer.close()) {
-            return fail("Error: " + writer.error());
-        }
-        if (writer.fields_written() == 0) {
+        const RepresentationFields fields(*source);
+        if (fields.field_count() == 0) {
             return fail("Error: the input has no frames");
         }
 
-        // 2) Run the decoder; its console output goes to the log file and,
-        // line by line, to the progress message.
-        std::vector<std::string> argv = {options.python, "-u", script};
-        const auto args = options.decoder_arguments(tbc_path.string());
-        argv.insert(argv.end(), args.begin(), args.end());
-
-        const fs::path log_path = fs::path(options.output_dir) / kLogName;
+        // The decoder's console output: to the log file, and line by line to
+        // the progress message.
+        const fs::path log_path = fs::u8path(options.output_dir) / kLogName;
         std::ofstream log(log_path, std::ios::trunc);
-        std::string command;
-        for (const auto& a : argv) {
-            command += (command.empty() ? "" : " ") + a;
-        }
-        log << "# " << command << "\n";
-
-        std::string last_line;
+        std::mutex log_mutex;
         std::string summary;
-        report(total, total * 2, "Running videodat_decoder.py...");
-        const ProcessResult result = run_process(
-            argv,
-            [&](const std::string& line) {
-                log << line << "\n";
-                if (line.empty()) {
-                    return;
+        size_t done = 0;
+        const size_t total = fields.field_count();
+        const ::videodat::LogFn log_line = [&](const std::string& line) {
+            std::lock_guard<std::mutex> lock(log_mutex);
+            log << line << "\n";
+            log.flush();
+            if (line.find(" Dateien, davon ") != std::string::npos) {
+                summary = line;
+            }
+            if (!line.empty()) {
+                report(done, total, line);
+            }
+        };
+        report(0, total, "Searching the VideoDat lines...");
+        const auto result = ::videodat::decode_fields(
+            fields, options.decode_options(), log_line,
+            [&](size_t current, size_t all) {
+                done = current;
+                if (current % 4096 == 0 || current == all) {
+                    report(current, all, "Decoding field " + std::to_string(current) + " of " + std::to_string(all));
                 }
-                last_line = line;
-                // Summary line: "<n> Dateien, davon <m> vollstaendig"
-                if (line.find(" Dateien, davon ") != std::string::npos) {
-                    summary = line;
-                }
-                report(total, total * 2, line);
             },
-            cancel_requested_);
+            &cancel_requested_);
         log.close();
-        cleanup();
-
-        if (!result.started) {
-            return fail("Error: " + result.error);
-        }
         if (result.cancelled) {
             return fail("Cancelled");
         }
-        if (result.exit_code != 0) {
-            std::string why = result.error.empty() ? last_line : result.error;
-            return fail("Error: decoder exited with code " + std::to_string(result.exit_code) +
-                        (why.empty() ? "" : ": " + why) + " (log: " + log_path.string() + ")");
-        }
 
-        report(total * 2, total * 2, "Done");
-        set_status("Decoded " + std::to_string(writer.fields_written()) + " fields" +
-                   (summary.empty() ? "" : "; " + summary) + "; output in " +
-                   options.output_dir + ", log " + kLogName);
+        report(total, total, "Done");
+        set_status("Decoded " + std::to_string(total) + " fields (variant " + result.variant + ")" +
+                   (summary.empty() ? "" : "; " + summary) + "; output in " + options.output_dir + ", log " +
+                   kLogName);
         is_processing_.store(false);
         return true;
     } catch (const std::exception& e) {

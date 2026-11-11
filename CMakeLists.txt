@@ -34,10 +34,6 @@ if(WIN32)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
-# channel-videodat-decoder checkout whose Python scripts are copied next to
-# the plugin (videodat-decoder/), where the stage looks for them by default.
-set(VIDEODAT_DECODER_DIR "" CACHE PATH
-    "channel-videodat-decoder checkout to bundle with the plugin (optional)")
 
 if(DEFINED ORC_INTREE_SDK_DIR)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DecodeOrcPluginSDKHelpers.cmake")
@@ -74,10 +70,22 @@ endif()
 set(VIDEODAT_STAGE_NAME "videodat_decoder")
 set(VIDEODAT_PLUGIN_TARGET "orc-stage-plugin-videodat")
 
+# The C++ port of videodat_decoder.py
+set(VIDEODAT_DECODER_SOURCES
+    src/decoder/vd_util.cpp
+    src/decoder/vd_json.cpp
+    src/decoder/vd_prng.cpp
+    src/decoder/vd_crypto.cpp
+    src/decoder/vd_packets.cpp
+    src/decoder/vd_signal.cpp
+    src/decoder/vd_assemble.cpp
+    src/decoder/vd_1990.cpp
+    src/decoder/vd_decoder.cpp
+)
+
 set(VIDEODAT_STAGE_SOURCES
+    ${VIDEODAT_DECODER_SOURCES}
     src/videodat_sink_stage.cpp
-    src/vbi_tbc_writer.cpp
-    src/decoder_process.cpp
 )
 
 orc_add_stage_plugin(
@@ -93,22 +101,11 @@ target_include_directories(${VIDEODAT_PLUGIN_TARGET} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-if(VIDEODAT_DECODER_DIR)
-    file(GLOB _videodat_scripts "${VIDEODAT_DECODER_DIR}/*.py")
-    if(NOT _videodat_scripts)
-        message(FATAL_ERROR "VIDEODAT_DECODER_DIR has no Python scripts: ${VIDEODAT_DECODER_DIR}")
-    endif()
-    foreach(_script IN LISTS _videodat_scripts)
-        get_filename_component(_name "${_script}" NAME)
-        add_custom_command(TARGET ${VIDEODAT_PLUGIN_TARGET} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_FILE_DIR:${VIDEODAT_PLUGIN_TARGET}>/videodat-decoder"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_script}"
-                "$<TARGET_FILE_DIR:${VIDEODAT_PLUGIN_TARGET}>/videodat-decoder/${_name}")
-    endforeach()
-    install(FILES ${_videodat_scripts}
-        DESTINATION "${ORC_STAGE_PLUGIN_INSTALL_DIR}/videodat-decoder")
-endif()
+# Command-line front end of the C++ decoder (same options as
+# videodat_decoder.py), used to compare the port with the Python decoder.
+add_executable(videodat_decode tools/videodat_decode.cpp ${VIDEODAT_DECODER_SOURCES})
+target_include_directories(videodat_decode PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set_target_properties(videodat_decode PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
 # Build-info emitter for the release manifest (host ABI 12 and later).
 # Compiled with the same toolchain and SDK headers as the plugin, it prints

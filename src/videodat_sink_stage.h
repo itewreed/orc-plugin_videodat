@@ -10,6 +10,8 @@
 
 #include <orc/abi/orc_plugin_sdk.h>
 
+#include "decoder/vd_decoder.h"
+
 #include <atomic>
 #include <map>
 #include <memory>
@@ -23,7 +25,7 @@ namespace orc::plugins::videodat {
 struct DecoderOptions {
     std::string output_dir;
     std::string variant{"auto"};  // auto, 1993, 1990
-    std::string lines;            // "" = automatic
+    std::string lines;            // "" = automatic, else "11,12,13,324"
     int32_t scan_seconds{30};
     bool no_sync{false};
     bool no_eq{false};
@@ -34,26 +36,43 @@ struct DecoderOptions {
     bool decrypt_files{false};
     bool save_bytes{false};
     std::string save_bytes_path;  // "" = <output_dir>/<dir name>.bin
-    std::string python{"python3"};
-    std::string decoder_script;   // "" = bundled copy next to the plugin
 
-    // Command line for videodat_decoder.py (without interpreter and script),
-    // reading |tbc_path|. Options that only the 1993 variant knows are left
-    // out when the 1990 variant is selected.
-    std::vector<std::string> decoder_arguments(const std::string& tbc_path) const;
+    // The options of the decoder (videodat_decoder.py command line). Options
+    // that only the 1993 variant knows are dropped for the 1990 variant.
+    ::videodat::DecodeOptions decode_options() const;
 
     // The byte-stream file --save-bytes writes, or "" when it is off.
     std::string effective_save_bytes_path() const;
 };
 
+// Presents the first lines of every field of a CVBS representation to the
+// decoder, in the 16-bit TBC domain the decoder was written for.
+class RepresentationFields : public ::videodat::FieldSource {
+public:
+    explicit RepresentationFields(const VideoFrameRepresentation& source);
+    size_t field_count() const override { return fields_; }
+    size_t width() const override { return width_; }
+    size_t field_lines() const override { return field_lines_; }
+    bool is_first_field(size_t fi) const override { return fi % 2 == 0; }
+    void read_line(size_t fi, size_t li, double* out) const override;
+
+private:
+    const VideoFrameRepresentation& source_;
+    FrameID first_{0};
+    size_t fields_{0};
+    size_t width_{0};
+    size_t field_lines_{0};
+    size_t field1_lines_{0};
+    size_t frame_height_{0};
+    bool yc_{false};
+};
+
 // VideoDat Decoder (SINK)
 //
 // Pro7 VideoDat (1990-1994) is a data service in the vertical blanking
-// interval. On trigger the stage copies the first 40 lines of every field of
-// its input into a reduced TBC file in the output directory, runs
-// videodat_decoder.py on it, and deletes the file afterwards. The decoder
-// writes the received files, the service report and its console log
-// (videodat_decoder.log) into the output directory.
+// interval. On trigger the stage decodes it with the built-in C++ port of
+// videodat_decoder.py and writes the received files, the service report and
+// the decoder's console log (videodat_decoder.log) to the output directory.
 class VideoDatSinkStage : public DAGStage,
                           public ParameterizedStage,
                           public TriggerableStage,
