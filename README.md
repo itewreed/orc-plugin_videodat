@@ -93,6 +93,11 @@ Flatpak can write to.
 
 ## Release
 
+The Linux release binary is built with gcc 14 against the SDK of decode-orc
+v2.11.1, so it loads in the decode-orc Flatpak (toolchain tag
+`gcc14/libstdc++`, host ABI 19). A decode-orc built from its own Nix flake
+uses gcc 15 and needs a plugin built in the same environment (see above).
+
 Packaging and the release manifest work as in the skeleton
 (`scripts/package_local.sh`, `scripts/merge_manifests.sh`); assets are named
 `orc-plugin_videodat_decoder_<platform>_abi<N>.<ext>`.

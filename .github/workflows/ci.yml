@@ -24,10 +24,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The Linux binary targets the decode-orc Flatpak (v2.11.1, KDE
+          # runtime 6.9), which is built with gcc 14: the host only loads a
+          # plugin whose toolchain tag (gcc14/libstdc++) matches its own. It
+          # is built with nixpkgs' gcc 14 against the SDK headers of that
+          # release (host ABI 19, the same as main at the time of writing).
           - os: ubuntu-latest
             platform: linux
             ext: so
             use_nix: true
+            nix_cxx: gcc14
+            sdk_ref: v2.11.1
           - os: macos-latest
             platform: macos
             ext: dylib
@@ -45,7 +52,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: decode-orc/decode-orc
-          ref: ${{ env.ORC_SDK_REF }}
+          ref: ${{ matrix.sdk_ref || env.ORC_SDK_REF }}
           path: decode-orc
 
       - name: Install Nix
@@ -82,8 +89,13 @@ jobs:
       - name: Configure (Nix)
         if: matrix.use_nix
         run: |
+          COMPILER_ARGS=""
+          if [ -n "${{ matrix.nix_cxx }}" ]; then
+            CXX_PKG="$(nix build --no-link --print-out-paths --inputs-from . "nixpkgs#${{ matrix.nix_cxx }}^out")"
+            COMPILER_ARGS="-DCMAKE_CXX_COMPILER=$CXX_PKG/bin/g++"
+          fi
           nix develop --accept-flake-config --command \
-            cmake -S . -B build $ORC_CMAKE_ARGS
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release $COMPILER_ARGS $ORC_CMAKE_ARGS
 
       - name: Install fmt (Windows)
         if: runner.os == 'Windows'
