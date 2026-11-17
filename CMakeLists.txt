@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(orc-plugin-videodat
-    VERSION 0.1.0
+    VERSION 0.1.1
     DESCRIPTION "Decode-Orc VideoDat decoder sink stage plugin"
     LANGUAGES CXX
 )

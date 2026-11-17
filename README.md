@@ -60,18 +60,18 @@ the Sink menu.
 
 ## Build for the decode-orc Flatpak
 
-The Flatpak (io.github.decode_orc.decode-orc, v2.11.1, KDE runtime 6.9) is
+The Flatpak (io.github.decode_orc.decode-orc, v2.12.0, KDE runtime 6.9) is
 built with gcc 14, so the plugin must be too (toolchain tag
 `gcc14/libstdc++`). Build against the SDK headers of the installed release
 with nixpkgs' gcc 14:
 
 ```bash
-mkdir -p /tmp/orc-v2.11.1
-git -C /path/to/decode-orc archive v2.11.1 orc/sdk | tar -x -C /tmp/orc-v2.11.1
+mkdir -p /tmp/orc-v2.12.0
+git -C /path/to/decode-orc archive v2.12.0 orc/sdk | tar -x -C /tmp/orc-v2.12.0
 GCC14=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#gcc14)
 nix develop --command bash -c "CXX=$GCC14/bin/g++ CC=$GCC14/bin/gcc \
     cmake -S . -B build-flatpak -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DORC_INTREE_SDK_DIR=/tmp/orc-v2.11.1 \
+    -DORC_INTREE_SDK_DIR=/tmp/orc-v2.12.0 \
     && cmake --build build-flatpak"
 ORC_STAGE_PLUGIN_PATHS=$PWD/build-flatpak/lib/orc-stage-plugins \
     flatpak run io.github.decode_orc.decode-orc
@@ -94,8 +94,8 @@ Flatpak can write to.
 ## Release
 
 The Linux release binary is built with gcc 14 against the SDK of decode-orc
-v2.11.1, so it loads in the decode-orc Flatpak (toolchain tag
-`gcc14/libstdc++`, host ABI 19). A decode-orc built from its own Nix flake
+v2.12.0, so it loads in the decode-orc Flatpak (toolchain tag
+`gcc14/libstdc++`, host ABI 21). A decode-orc built from its own Nix flake
 uses gcc 15 and needs a plugin built in the same environment (see above).
 
 Packaging and the release manifest work as in the skeleton

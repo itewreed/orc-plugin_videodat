@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ORC_SDK_DIR: ${{ github.workspace }}/decode-orc
-      # Host SDK the plugin is built against. Tracks `main` (host ABI 13).
+      # Host SDK the plugin is built against. Tracks `main` (host ABI 21).
       # Pin to a branch or tag only for a deliberate, temporary reason, and
       # restore `main` once it merges.
       ORC_SDK_REF: main
@@ -24,17 +24,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The Linux binary targets the decode-orc Flatpak (v2.11.1, KDE
+          # The Linux binary targets the decode-orc Flatpak (v2.12.0, KDE
           # runtime 6.9), which is built with gcc 14: the host only loads a
           # plugin whose toolchain tag (gcc14/libstdc++) matches its own. It
           # is built with nixpkgs' gcc 14 against the SDK headers of that
-          # release (host ABI 19, the same as main at the time of writing).
+          # release (host ABI 21, the same as main at the time of writing).
           - os: ubuntu-latest
             platform: linux
             ext: so
             use_nix: true
             nix_cxx: gcc14
-            sdk_ref: v2.11.1
+            sdk_ref: v2.12.0
           - os: macos-latest
             platform: macos
             ext: dylib
